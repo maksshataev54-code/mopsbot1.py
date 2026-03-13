@@ -8,7 +8,7 @@ from collections import deque
 TOKEN = '8684574901:AAEIp2yTBytttMoUSyzvlE-k666z9VtiGYg'
 bot = telebot.TeleBot(TOKEN)
 
-# ========== ТВОИ ФРАЗЫ ==========
+# ========== ТВОИ ФРАЗЫ (РОССИЙСКИЕ) ==========
 RUSSIAN_PHRASES = [
     "Жизнь боль, но ты держись!",
     "Программист — это не профессия, это образ жизни",
@@ -47,9 +47,9 @@ PUG_FACTS = [
 # ========== БАЗЫ ДАННЫХ ==========
 users = {}
 reg_states = {}
-chat_words = {}
-chat_msg_count = {}
-chat_next_reply = {}
+chat_words = {}          # слова для каждого чата
+chat_counters = {}       # счетчик сообщений
+chat_threshold = {}      # через сколько отвечать
 waiting_for_question = set()
 
 # ========== ФУНКЦИИ ДЛЯ СЛОВ ==========
@@ -58,12 +58,14 @@ def save_word(chat_id, word):
         chat_words[chat_id] = []
     if len(word) > 0:
         chat_words[chat_id].append(word.lower())
+        # оставляем последние 50 слов
         if len(chat_words[chat_id]) > 50:
             chat_words[chat_id] = chat_words[chat_id][-50:]
 
 def get_random_words(chat_id):
     if chat_id not in chat_words or len(chat_words[chat_id]) < 3:
         return None
+    # берем 3 случайных слова
     words = random.sample(chat_words[chat_id], 3)
     return ' '.join(words)
 
@@ -124,13 +126,13 @@ def start(message):
                 reply_markup=markup
             )
     else:
-        if message.chat.id not in chat_msg_count:
-            chat_msg_count[message.chat.id] = 0
-            chat_next_reply[message.chat.id] = random.randint(3, 6)
+        if message.chat.id not in chat_counters:
+            chat_counters[message.chat.id] = 0
+            chat_threshold[message.chat.id] = random.randint(3, 6)
         
         bot.send_message(
             message.chat.id,
-            "👋 Привет, чат!",
+            "👋 Привет, чат! Я отвечаю каждые 3-6 сообщений.",
             reply_markup=get_chat_keyboard()
         )
 
@@ -174,8 +176,12 @@ def buy(message):
 def mops_fact(message):
     bot.send_message(message.chat.id, f"✨ {random.choice(PUG_FACTS)}")
 
+# ========== /ДАНЕТ ТОЛЬКО В ЛИЧКЕ ==========
 @bot.message_handler(commands=['данет'])
 def yes_no_command(message):
+    if message.chat.type != 'private':
+        bot.send_message(message.chat.id, "❌ Команда /данет работает только в личных сообщениях!")
+        return
     user_id = message.from_user.id
     waiting_for_question.add(user_id)
     bot.send_message(user_id, "❓ Напиши свой вопрос, а я отвечу честно 50/50", parse_mode='Markdown')
@@ -190,9 +196,9 @@ def help_command(message):
         "/shop - Магазин игрушек\n"
         "/buy - Купить мопсокрипты\n"
         "/mops - Факты о мопсах\n"
-        "/данет - Честный ответ 50/50\n"
+        "/данет - Честный ответ 50/50 (только в ЛС)\n"
         "/help - Это меню\n\n"
-        "В чате: каждые 3-6 сообщений"
+        "В чате: каждые 3-6 сообщений бот отвечает случайными словами из чата"
     )
     bot.send_message(message.chat.id, text, parse_mode='Markdown')
 
@@ -226,7 +232,7 @@ def ls_handle_registration(message):
         del reg_states[user_id]
         bot.send_message(user_id, f"✅ Регистрация завершена, {users[user_id]['name']}!", reply_markup=get_ls_keyboard())
 
-# ========== ДАНЕТ ==========
+# ========== ДАНЕТ (ОБРАБОТКА ВОПРОСОВ) ==========
 @bot.message_handler(func=lambda message: message.from_user.id in waiting_for_question and message.chat.type == 'private')
 def handle_yes_no_question(message):
     user_id = message.from_user.id
@@ -324,41 +330,47 @@ def chat_callback_handler(call):
         if words:
             bot.send_message(chat_id, f"🌀 {words}")
         else:
-            bot.send_message(chat_id, "❌ Мало слов (нужно минимум 3)")
+            bot.send_message(chat_id, "❌ Мало слов в чате (нужно минимум 3)")
     
     elif data == "chat_about":
         word_count = len(chat_words.get(chat_id, []))
-        msg_count = chat_msg_count.get(chat_id, 0)
-        next_reply = chat_next_reply.get(chat_id, 3)
-        bot.send_message(chat_id, f"ℹ️ Слов сохранено: {word_count}\nСообщений: {msg_count}/{next_reply}")
+        msg_count = chat_counters.get(chat_id, 0)
+        threshold = chat_threshold.get(chat_id, 3)
+        bot.send_message(chat_id, f"ℹ️ Слов сохранено: {word_count}\nСообщений: {msg_count}/{threshold}")
 
-# ========== СООБЩЕНИЯ В ЧАТЕ ==========
+# ========== СООБЩЕНИЯ В ЧАТЕ (АВТООТВЕТЫ) ==========
 @bot.message_handler(func=lambda message: message.chat.type in ['group', 'supergroup'])
 def handle_chat_messages(message):
     chat_id = message.chat.id
     
-    if chat_id not in chat_msg_count:
-        chat_msg_count[chat_id] = 0
-        chat_next_reply[chat_id] = random.randint(3, 6)
+    # Инициализация для нового чата
+    if chat_id not in chat_counters:
+        chat_counters[chat_id] = 0
+        chat_threshold[chat_id] = random.randint(3, 6)
     
     if message.text and not message.text.startswith('/'):
+        # Сохраняем все слова
         words = message.text.split()
         for word in words:
             clean_word = ''.join(c for c in word if c.isalpha())
             if len(clean_word) > 0:
                 save_word(chat_id, clean_word)
         
-        chat_msg_count[chat_id] += 1
+        # Увеличиваем счетчик
+        chat_counters[chat_id] += 1
         
-        if chat_msg_count[chat_id] >= chat_next_reply[chat_id]:
+        # Проверяем, пора ли отвечать
+        if chat_counters[chat_id] >= chat_threshold[chat_id]:
+            # Пытаемся получить слова из чата
             words = get_random_words(chat_id)
             if words:
                 bot.send_message(chat_id, f"🌀 {words}")
             else:
                 bot.send_message(chat_id, f"💬 {random.choice(RUSSIAN_PHRASES)}")
             
-            chat_msg_count[chat_id] = 0
-            chat_next_reply[chat_id] = random.randint(3, 6)
+            # Сбрасываем счетчики
+            chat_counters[chat_id] = 0
+            chat_threshold[chat_id] = random.randint(3, 6)
 
 # ========== ЗАПУСК ==========
 if __name__ == '__main__':
@@ -367,8 +379,9 @@ if __name__ == '__main__':
     print("🐶" + "="*50)
     print("✅ Доступные команды:")
     print("   /start, /menu, /profile, /shop")
-    print("   /buy, /mops, /данет, /help")
+    print("   /buy, /mops, /данет (только в ЛС), /help")
     print("✅ В чате: собирает слова, отвечает 3-6 сообщений")
+    print("✅ Всё на русском языке")
     print("🐶" + "="*50)
     
     while True:
